@@ -22,4 +22,9 @@ build:
 apply-ballast:
 	for f in tempo-ballast-*.yaml; do kubectl apply -n $(NAMESPACE_PREFIX)-$$(basename $$f .yaml) -f $$f; done
 	git add .
-	-git commit -m "Applied on $$(date)"
+	git commit
+
+apply-memlimit:
+	for f in tempo-ballast-0gb.yaml tempo-memlimit-*.yaml; do kubectl apply -n $(NAMESPACE_PREFIX)-$$(basename $$f .yaml) -f $$f; done
+	git add .
+	git commit
