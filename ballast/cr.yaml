@@ -1,0 +1,20 @@
+apiVersion: tempo.grafana.com/v1alpha1
+kind: Microservices
+metadata:
+  name: tempo-simplest
+spec:
+  storage:
+    secret: minio-test
+  storageSize: 10Gi
+  #resources:
+  #  total:
+  #    limits:
+  #      cpu: 4000m
+  #      memory: 20Gi
+  template:
+    queryFrontend:
+      jaegerQuery:
+        enabled: true
+  images:
+    # grafana/tempo v1.5 with PR https://github.com/grafana/tempo/pull/2005 applied
+    tempo: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233

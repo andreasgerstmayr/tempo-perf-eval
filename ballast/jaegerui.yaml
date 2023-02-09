@@ -1,0 +1,10 @@
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: jaeger
+spec:
+  to:
+    kind: Service
+    name: tempo-tempo-simplest-query-frontend
+  port:
+    targetPort: jaeger-ui

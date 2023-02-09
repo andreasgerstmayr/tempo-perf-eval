@@ -1,0 +1,1108 @@
+---
+apiVersion: v1
+data:
+  overrides.yaml: |
+    overrides:
+  tempo-query.yaml: |
+    backend: 127.0.0.1:3200
+  tempo.yaml: |
+    compactor:
+      compaction:
+        block_retention: 48h0m0s
+      ring:
+        kvstore:
+          store: memberlist
+    distributor:
+      receivers:
+        jaeger:
+          protocols:
+            thrift_http:
+              endpoint: 0.0.0.0:14268
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      ring:
+        kvstore:
+          store: memberlist
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: memberlist
+          replication_factor: 1
+        tokens_file_path: /var/tempo/tokens.json
+      max_block_duration: 10m
+    memberlist:
+      abort_if_cluster_join_fails: false
+      join_members:
+      - tempo-tempo-simplest-gossip-ring
+    metrics_generator_enabled: false
+    multitenancy_enabled: false
+    overrides:
+      max_search_bytes_per_trace: 0
+    querier:
+      max_concurrent_queries: 20
+      frontend_worker:
+        frontend_address: tempo-tempo-simplest-query-frontend-discovery:9095
+      search:
+        external_hedge_requests_at: 8s
+        external_hedge_requests_up_to: 2
+    search_enabled: true
+    server:
+      grpc_server_max_recv_msg_size: 4194304
+      grpc_server_max_send_msg_size: 4194304
+      http_listen_port: 3200
+      http_server_read_timeout: 3m
+      http_server_write_timeout: 3m
+      log_format: logfmt
+      log_level: debug
+    storage:
+      trace:
+        backend: s3
+        blocklist_poll: 5m
+        cache: none
+        s3:
+          endpoint: minio:9000
+          bucket: tempo
+          insecure: true
+        local:
+          path: /var/tempo/traces
+        wal:
+          path: /var/tempo/wal
+    usage_report:
+      reporting_enabled: false
+    query_frontend:
+      search:
+        concurrent_jobs: 2000
+        max_duration: 0s
+        default_result_limit: 20
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: config
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: serviceaccount
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-serviceaccount
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: distributor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-distributor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: distributor
+      app.kubernetes.io/created-by: tempo-controller
+      app.kubernetes.io/instance: tempo-simplest
+      app.kubernetes.io/managed-by: tempo-controller
+      app.kubernetes.io/name: tempo
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        tempo.grafana.com/config.hash: 4797e79d1ca0997b46df2df96f6ca98b59010ae497a8f350f8714bcbbc221b76
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/component: distributor
+        app.kubernetes.io/created-by: tempo-controller
+        app.kubernetes.io/instance: tempo-simplest
+        app.kubernetes.io/managed-by: tempo-controller
+        app.kubernetes.io/name: tempo
+        tempo-gossip-member: "true"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: distributor
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: distributor
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: failure-domain.beta.kubernetes.io/zone
+            weight: 75
+      containers:
+      - args:
+        - -target=distributor
+        - -config.file=/conf/tempo.yaml
+        - -mem-ballast-size-mbs=0
+        env:
+        - name: GOMEMLIMIT
+          value: "2147483648"
+        image: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233
+        name: tempo
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 7946
+          name: http-memberlist
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: tempo-tmp-storage
+      serviceAccountName: tempo-tempo-simplest-serviceaccount
+      volumes:
+      - configMap:
+          name: tempo-tempo-simplest
+        name: tempo-conf
+      - emptyDir: {}
+        name: tempo-tmp-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: distributor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-distributor
+spec:
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    protocol: TCP
+    targetPort: otlp-grpc
+  - name: http
+    port: 3200
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/component: distributor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: ingester
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-ingester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ingester
+      app.kubernetes.io/created-by: tempo-controller
+      app.kubernetes.io/instance: tempo-simplest
+      app.kubernetes.io/managed-by: tempo-controller
+      app.kubernetes.io/name: tempo
+  serviceName: ""
+  template:
+    metadata:
+      annotations:
+        tempo.grafana.com/config.hash: 4797e79d1ca0997b46df2df96f6ca98b59010ae497a8f350f8714bcbbc221b76
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/component: ingester
+        app.kubernetes.io/created-by: tempo-controller
+        app.kubernetes.io/instance: tempo-simplest
+        app.kubernetes.io/managed-by: tempo-controller
+        app.kubernetes.io/name: tempo
+        tempo-gossip-member: "true"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: ingester
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: ingester
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: failure-domain.beta.kubernetes.io/zone
+            weight: 75
+      containers:
+      - args:
+        - -target=ingester
+        - -config.file=/conf/tempo.yaml
+        - -mem-ballast-size-mbs=0
+        - --storage.trace.s3.secret_key=$(S3_SECRET_KEY)
+        - --storage.trace.s3.access_key=$(S3_ACCESS_KEY)
+        env:
+        - name: GOMEMLIMIT
+          value: "2147483648"
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_secret
+              name: minio-test
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_id
+              name: minio-test
+        image: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233
+        name: tempo
+        ports:
+        - containerPort: 7946
+          name: http-memberlist
+          protocol: TCP
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 9095
+          name: grpc
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: data
+      serviceAccountName: tempo-tempo-simplest-serviceaccount
+      volumes:
+      - configMap:
+          name: tempo-tempo-simplest
+        name: tempo-conf
+  updateStrategy: {}
+  volumeClaimTemplates:
+  - metadata:
+      creationTimestamp: null
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+      volumeMode: Filesystem
+    status: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: ingester
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-ingester
+spec:
+  ports:
+  - name: http
+    port: 3200
+    protocol: TCP
+    targetPort: http
+  - name: grpc
+    port: 9095
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: ingester
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: gossip-ring
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-gossip-ring
+spec:
+  clusterIP: None
+  ports:
+  - name: http-memberlist
+    port: 7946
+    protocol: TCP
+    targetPort: http-memberlist
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+    tempo-gossip-member: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: query-frontend
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-query-frontend
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: query-frontend
+      app.kubernetes.io/created-by: tempo-controller
+      app.kubernetes.io/instance: tempo-simplest
+      app.kubernetes.io/managed-by: tempo-controller
+      app.kubernetes.io/name: tempo
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        tempo.grafana.com/config.hash: 4797e79d1ca0997b46df2df96f6ca98b59010ae497a8f350f8714bcbbc221b76
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/component: query-frontend
+        app.kubernetes.io/created-by: tempo-controller
+        app.kubernetes.io/instance: tempo-simplest
+        app.kubernetes.io/managed-by: tempo-controller
+        app.kubernetes.io/name: tempo
+        tempo-gossip-member: "true"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: query-frontend
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: query-frontend
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: failure-domain.beta.kubernetes.io/zone
+            weight: 75
+      containers:
+      - args:
+        - -target=query-frontend
+        - -config.file=/conf/tempo.yaml
+        - -mem-ballast-size-mbs=0
+        - --storage.trace.s3.secret_key=$(S3_SECRET_KEY)
+        - --storage.trace.s3.access_key=$(S3_ACCESS_KEY)
+        env:
+        - name: GOMEMLIMIT
+          value: "2147483648"
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_secret
+              name: minio-test
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_id
+              name: minio-test
+        image: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233
+        name: query-frontend
+        ports:
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 9095
+          name: grpc
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: tempo-tmp-storage
+      - args:
+        - --query.base-path=/
+        - --grpc-storage-plugin.configuration-file=/conf/tempo-query.yaml
+        - --query.bearer-token-propagation=true
+        image: docker.io/grafana/tempo-query:1.5.0
+        name: tempo-query
+        ports:
+        - containerPort: 16686
+          name: jaeger-ui
+          protocol: TCP
+        - containerPort: 16687
+          name: jaeger-metrics
+          protocol: TCP
+        resources: {}
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: tempo-tmp-storage-query
+      serviceAccountName: tempo-tempo-simplest-serviceaccount
+      volumes:
+      - configMap:
+          name: tempo-tempo-simplest
+        name: tempo-conf
+      - emptyDir: {}
+        name: tempo-tmp-storage
+      - emptyDir: {}
+        name: tempo-tmp-storage-query
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: query-frontend
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-query-frontend
+spec:
+  ports:
+  - name: http
+    port: 3200
+    targetPort: http
+  - name: grpc
+    port: 9095
+    protocol: TCP
+    targetPort: grpc
+  - name: jaeger-ui
+    port: 16686
+    targetPort: jaeger-ui
+  - name: jaeger-metrics
+    port: 16687
+    targetPort: jaeger-metrics
+  selector:
+    app.kubernetes.io/component: query-frontend
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: query-frontend
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-query-frontend-discovery
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 3200
+    targetPort: http
+  - name: grpc
+    port: 9095
+    protocol: TCP
+    targetPort: grpc
+  - name: grpclb
+    port: 9096
+    protocol: TCP
+    targetPort: grpclb
+  - name: jaeger-ui
+    port: 16686
+    targetPort: jaeger-ui
+  - name: jaeger-metrics
+    port: 16687
+    targetPort: jaeger-metrics
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/component: query-frontend
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: querier
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-querier
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: querier
+      app.kubernetes.io/created-by: tempo-controller
+      app.kubernetes.io/instance: tempo-simplest
+      app.kubernetes.io/managed-by: tempo-controller
+      app.kubernetes.io/name: tempo
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        tempo.grafana.com/config.hash: 4797e79d1ca0997b46df2df96f6ca98b59010ae497a8f350f8714bcbbc221b76
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/component: querier
+        app.kubernetes.io/created-by: tempo-controller
+        app.kubernetes.io/instance: tempo-simplest
+        app.kubernetes.io/managed-by: tempo-controller
+        app.kubernetes.io/name: tempo
+        tempo-gossip-member: "true"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: querier
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: querier
+                  app.kubernetes.io/created-by: tempo-controller
+                  app.kubernetes.io/instance: tempo-simplest
+                  app.kubernetes.io/managed-by: tempo-controller
+                  app.kubernetes.io/name: tempo
+              topologyKey: failure-domain.beta.kubernetes.io/zone
+            weight: 75
+      containers:
+      - args:
+        - -target=querier
+        - -config.file=/conf/tempo.yaml
+        - -mem-ballast-size-mbs=0
+        - --storage.trace.s3.secret_key=$(S3_SECRET_KEY)
+        - --storage.trace.s3.access_key=$(S3_ACCESS_KEY)
+        env:
+        - name: GOMEMLIMIT
+          value: "2147483648"
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_secret
+              name: minio-test
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_id
+              name: minio-test
+        image: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233
+        name: tempo
+        ports:
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 7946
+          name: http-memberlist
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: tempo-tmp-storage
+      serviceAccountName: tempo-tempo-simplest-serviceaccount
+      volumes:
+      - configMap:
+          name: tempo-tempo-simplest
+        name: tempo-conf
+      - emptyDir: {}
+        name: tempo-tmp-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: querier
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-querier
+spec:
+  ports:
+  - name: http-memberlist
+    port: 7946
+    protocol: TCP
+    targetPort: http-memberlist
+  - name: http
+    port: 3200
+    protocol: TCP
+    targetPort: http
+  - name: grpc
+    port: 9095
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: querier
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: compactor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-compactor
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: compactor
+      app.kubernetes.io/created-by: tempo-controller
+      app.kubernetes.io/instance: tempo-simplest
+      app.kubernetes.io/managed-by: tempo-controller
+      app.kubernetes.io/name: tempo
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        tempo.grafana.com/config.hash: 4797e79d1ca0997b46df2df96f6ca98b59010ae497a8f350f8714bcbbc221b76
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/component: compactor
+        app.kubernetes.io/created-by: tempo-controller
+        app.kubernetes.io/instance: tempo-simplest
+        app.kubernetes.io/managed-by: tempo-controller
+        app.kubernetes.io/name: tempo
+        tempo-gossip-member: "true"
+    spec:
+      containers:
+      - args:
+        - -target=compactor
+        - -config.file=/conf/tempo.yaml
+        - -mem-ballast-size-mbs=0
+        - --storage.trace.s3.secret_key=$(S3_SECRET_KEY)
+        - --storage.trace.s3.access_key=$(S3_ACCESS_KEY)
+        env:
+        - name: GOMEMLIMIT
+          value: "2147483648"
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_secret
+              name: minio-test
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access_key_id
+              name: minio-test
+        image: docker.io/andreasgerstmayr/tempo:v1.5-metrics-1675095233
+        name: tempo
+        ports:
+        - containerPort: 3200
+          name: http
+          protocol: TCP
+        - containerPort: 7946
+          name: http-memberlist
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 15
+          timeoutSeconds: 1
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /conf
+          name: tempo-conf
+          readOnly: true
+        - mountPath: /var/tempo
+          name: tempo-tmp-storage
+      serviceAccountName: tempo-tempo-simplest-serviceaccount
+      volumes:
+      - configMap:
+          name: tempo-tempo-simplest
+        name: tempo-conf
+      - emptyDir: {}
+        name: tempo-tmp-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/component: compactor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+  name: tempo-tempo-simplest-compactor
+spec:
+  ports:
+  - name: http-memberlist
+    port: 7946
+    protocol: TCP
+    targetPort: http-memberlist
+  - name: http
+    port: 3200
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/component: compactor
+    app.kubernetes.io/created-by: tempo-controller
+    app.kubernetes.io/instance: tempo-simplest
+    app.kubernetes.io/managed-by: tempo-controller
+    app.kubernetes.io/name: tempo
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app.kubernetes.io/name: minio
+  name: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio
+    spec:
+      containers:
+        - command:
+            - /bin/sh
+            - -c
+            - |
+              mkdir -p /storage/tempo && \
+              minio server /storage
+          env:
+            - name: MINIO_ACCESS_KEY
+              value: tempo
+            - name: MINIO_SECRET_KEY
+              value: supersecret
+          image: minio/minio
+          name: minio
+          ports:
+            - containerPort: 9000
+          volumeMounts:
+            - mountPath: /storage
+              name: storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: minio
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  ports:
+    - port: 9000
+      protocol: TCP
+      targetPort: 9000
+  selector:
+    app.kubernetes.io/name: minio
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-test
+stringData:
+  endpoint: http://minio:9000
+  bucket: tempo
+  access_key_id: tempo
+  access_key_secret: supersecret
+type: Opaque
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tempo
+spec:
+  endpoints:
+  - interval: 15s
+    port: http
+    relabelings:
+      - separator: /
+        sourceLabels:
+          - __meta_kubernetes_namespace
+          - __meta_kubernetes_endpoints_label_app_kubernetes_io_component
+        targetLabel: job
+      - sourceLabels:
+          - __meta_kubernetes_namespace
+        targetLabel: cluster
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+---
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: jaeger
+spec:
+  to:
+    kind: Service
+    name: tempo-tempo-simplest-query-frontend
+  port:
+    targetPort: jaeger-ui
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-config
+data:
+  loadgen.js: |
+    // based on https://github.com/grafana/xk6-client-tracing/blob/599b8ecde3d251de411c2c40c07ed631a95764b7/examples/template/template.js
+    import {sleep} from 'k6';
+    import tracing from 'k6/x/tracing';
+    import { randomIntBetween } from 'https://jslib.k6.io/k6-utils/1.2.0/index.js';
+
+    export const options = {
+        vus: 1000, // note: runs in 5 containers
+        duration: "20m",
+    };
+
+    const endpoint = __ENV.ENDPOINT || "otel-collector:4317"
+    const client = new tracing.Client({
+        endpoint,
+        exporter: tracing.EXPORTER_OTLP,
+        insecure: true,
+    });
+
+    const traceDefaults = {
+        attributeSemantics: tracing.SEMANTICS_HTTP,
+        attributes: {"one": "three"},
+        randomAttributes: {count: 2, cardinality: 5}
+    }
+
+    const traceTemplates = [
+        {
+            defaults: traceDefaults,
+            spans: [
+                {service: "shop-backend", name: "list-articles", duration: {min: 200, max: 900}},
+                {service: "shop-backend", name: "authenticate", duration: {min: 50, max: 100}},
+                {service: "auth-service", name: "authenticate"},
+                {service: "shop-backend", name: "fetch-articles", parentIdx: 0},
+                {service: "article-service", name: "list-articles"},
+                {service: "article-service", name: "select-articles", attributeSemantics: tracing.SEMANTICS_DB},
+                {service: "postgres", name: "query-articles", attributeSemantics: tracing.SEMANTICS_DB, randomAttributes: {count: 5}},
+            ]
+        },
+        {
+            defaults: {
+                attributeSemantics: tracing.SEMANTICS_HTTP,
+            },
+            spans: [
+                {service: "shop-backend", name: "article-to-cart", duration: {min: 400, max: 1200}},
+                {service: "shop-backend", name: "authenticate", duration: {min: 70, max: 200}},
+                {service: "auth-service", name: "authenticate"},
+                {service: "shop-backend", name: "get-article", parentIdx: 0},
+                {service: "article-service", name: "get-article"},
+                {service: "article-service", name: "select-articles", attributeSemantics: tracing.SEMANTICS_DB},
+                {service: "postgres", name: "query-articles", attributeSemantics: tracing.SEMANTICS_DB, randomAttributes: {count: 2}},
+                {service: "shop-backend", name: "place-articles", parentIdx: 0},
+                {service: "cart-service", name: "place-articles", attributes: {"article.count": 1, "http.status_code": 201}},
+                {service: "cart-service", name: "persist-cart"}
+            ]
+        },
+        {
+            defaults: traceDefaults,
+            spans: [
+                {service: "shop-backend", attributes: {"http.status_code": 403}},
+                {service: "shop-backend", name: "authenticate"},
+                {service: "auth-service", name: "authenticate", attributes: {"http.status_code": 403}},
+            ]
+        },
+    ]
+
+    export default function () {
+        const templateIndex = randomIntBetween(0, traceTemplates.length-1)
+        const gen = new tracing.TemplatedGenerator(traceTemplates[templateIndex])
+        client.push(gen.traces())
+
+        sleep(randomIntBetween(1, 5));
+    }
+
+    export function teardown() {
+        client.shutdown();
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgenerator
+  labels:
+    app: loadgenerator
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: loadgenerator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: loadgenerator
+    spec:
+      containers:
+      - name: loadgenerator
+        image: ghcr.io/grafana/xk6-client-tracing:v0.0.2
+        args:
+        - run
+        - /conf/loadgen.js
+        env:
+        - name: ENDPOINT
+          value: "tempo-tempo-simplest-distributor:4317"
+        volumeMounts:
+        - mountPath: /conf
+          name: k6-config
+          readOnly: true
+      volumes:
+      - name: k6-config
+        configMap:
+          name: k6-config

@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-config
+data:
+  # 1000 virtual users sending traces every 1-5 seconds
+  loadgen.js: |
+    // based on https://github.com/grafana/xk6-client-tracing/blob/599b8ecde3d251de411c2c40c07ed631a95764b7/examples/template/template.js
+    import {sleep} from 'k6';
+    import tracing from 'k6/x/tracing';
+    import { randomIntBetween } from 'https://jslib.k6.io/k6-utils/1.2.0/index.js';
+
+    export const options = {
+        vus: 1000,
+        duration: "20m",
+    };
+
+    const endpoint = __ENV.ENDPOINT || "otel-collector:4317"
+    const client = new tracing.Client({
+        endpoint,
+        exporter: tracing.EXPORTER_OTLP,
+        insecure: true,
+    });
+
+    const traceDefaults = {
+        attributeSemantics: tracing.SEMANTICS_HTTP,
+        attributes: {"one": "three"},
+        randomAttributes: {count: 2, cardinality: 5}
+    }
+
+    const traceTemplates = [
+        {
+            defaults: traceDefaults,
+            spans: [
+                {service: "shop-backend", name: "list-articles", duration: {min: 200, max: 900}},
+                {service: "shop-backend", name: "authenticate", duration: {min: 50, max: 100}},
+                {service: "auth-service", name: "authenticate"},
+                {service: "shop-backend", name: "fetch-articles", parentIdx: 0},
+                {service: "article-service", name: "list-articles"},
+                {service: "article-service", name: "select-articles", attributeSemantics: tracing.SEMANTICS_DB},
+                {service: "postgres", name: "query-articles", attributeSemantics: tracing.SEMANTICS_DB, randomAttributes: {count: 5}},
+            ]
+        },
+        {
+            defaults: {
+                attributeSemantics: tracing.SEMANTICS_HTTP,
+            },
+            spans: [
+                {service: "shop-backend", name: "article-to-cart", duration: {min: 400, max: 1200}},
+                {service: "shop-backend", name: "authenticate", duration: {min: 70, max: 200}},
+                {service: "auth-service", name: "authenticate"},
+                {service: "shop-backend", name: "get-article", parentIdx: 0},
+                {service: "article-service", name: "get-article"},
+                {service: "article-service", name: "select-articles", attributeSemantics: tracing.SEMANTICS_DB},
+                {service: "postgres", name: "query-articles", attributeSemantics: tracing.SEMANTICS_DB, randomAttributes: {count: 2}},
+                {service: "shop-backend", name: "place-articles", parentIdx: 0},
+                {service: "cart-service", name: "place-articles", attributes: {"article.count": 1, "http.status_code": 201}},
+                {service: "cart-service", name: "persist-cart"}
+            ]
+        },
+        {
+            defaults: traceDefaults,
+            spans: [
+                {service: "shop-backend", attributes: {"http.status_code": 403}},
+                {service: "shop-backend", name: "authenticate"},
+                {service: "auth-service", name: "authenticate", attributes: {"http.status_code": 403}},
+            ]
+        },
+    ]
+
+    export default function () {
+        const templateIndex = randomIntBetween(0, traceTemplates.length-1)
+        const gen = new tracing.TemplatedGenerator(traceTemplates[templateIndex])
+        client.push(gen.traces())
+
+        sleep(randomIntBetween(1, 5));
+    }
+
+    export function teardown() {
+        client.shutdown();
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgenerator
+  labels:
+    app: loadgenerator
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: loadgenerator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: loadgenerator
+    spec:
+      containers:
+      - name: loadgenerator
+        image: ghcr.io/grafana/xk6-client-tracing:v0.0.2
+        args:
+        - run
+        - /conf/loadgen.js
+        env:
+        - name: ENDPOINT
+          value: "tempo-tempo-simplest-distributor:4317"
+        volumeMounts:
+        - mountPath: /conf
+          name: k6-config
+          readOnly: true
+      volumes:
+      - name: k6-config
+        configMap:
+          name: k6-config
